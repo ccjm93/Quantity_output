@@ -76,11 +76,53 @@ def decide_area(ws, ai_judge=None) -> dict:
             verdict = ai_judge.judge_sheet(ws, ur)
             if verdict and verdict.get("area_addr"):
                 area = ws.Range(verdict["area_addr"])
-                return {"area_obj": area, "area_addr": verdict["area_addr"],
-                        "reason": "ai", "confidence": verdict.get("confidence", 0.5)}
+                ok, cover = _ai_area_is_safe(ws, ur, area)
+                if ok:
+                    return {"area_obj": area, "area_addr": verdict["area_addr"],
+                            "reason": "ai", "confidence": verdict.get("confidence", 0.5),
+                            "ai_coverage": round(cover, 3)}
+                else:
+                    # AI 가 실제 데이터를 과도하게 잘라냄 → 거부, 규칙 폴백
+                    print(f"    [경고] AI 영역이 데이터를 누락(coverage={cover:.2f}) "
+                          f"({ws.Name}) → 규칙 폴백")
         except Exception as e:
             print(f"    [경고] AI 판단 실패({ws.Name}): {e} → 규칙 폴백")
 
     addr = ur.Address  # $A$1:$..
     return {"area_obj": ur, "area_addr": addr,
             "reason": "rule:usedrange", "confidence": 0.8}
+
+
+# AI 영역이 실제 데이터의 이 비율 이상을 담아야 채택(미만이면 데이터 누락으로 간주)
+AI_MIN_COVERAGE = 0.95
+
+
+def _count_nonempty(rng) -> int:
+    try:
+        v = rng.Value
+    except Exception:
+        return 0
+    if v is None:
+        return 0
+    if not isinstance(v, tuple):
+        return 1 if v not in (None, "") else 0
+    n = 0
+    for row in v:
+        if isinstance(row, tuple):
+            for c in row:
+                if c not in (None, ""):
+                    n += 1
+        elif row not in (None, ""):
+            n += 1
+    return n
+
+
+def _ai_area_is_safe(ws, used_range, ai_area):
+    """AI 영역이 UsedRange 내 비어있지 않은 셀의 대부분을 포함하는지 검사.
+    Returns (안전여부, coverage비율). 데이터 누락 방지용 가드."""
+    total = _count_nonempty(used_range)
+    if total == 0:
+        return True, 1.0
+    inside = _count_nonempty(ai_area)
+    cover = inside / total
+    return cover >= AI_MIN_COVERAGE, cover
