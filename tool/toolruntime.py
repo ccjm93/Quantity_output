@@ -27,12 +27,16 @@ except Exception:
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from openpyxl import Workbook  # noqa: E402
+from openpyxl.styles import Font, PatternFill  # noqa: E402
+from openpyxl.utils import get_column_letter  # noqa: E402
+
 import detect as detect_mod  # noqa: E402
 import export as export_mod  # noqa: E402
 import prep as prep_mod  # noqa: E402
 import review as review_mod  # noqa: E402
 import structure as structure_mod  # noqa: E402
-from config import XL_OPENXML_WORKBOOK, compile_exclude_patterns, load_settings  # noqa: E402
+from config import compile_exclude_patterns, load_settings  # noqa: E402
 from excel_app import ExcelApp  # noqa: E402
 from merge import Merger  # noqa: E402
 
@@ -94,7 +98,7 @@ def _korean_error_types(types):
             out.append("#REF! 오류")
         elif "#" in raw or "overflow" in low or "열폭" in raw:
             out.append("# 연속 표시")
-        elif "ref" in low or "div" in low or "value" in low or "수식" in raw:
+        elif "div" in low or "value" in low or "수식" in raw:
             out.append("수식 오류")
         elif "테두리" in raw:
             out.append("하단 표 테두리 누락 의심")
@@ -109,8 +113,15 @@ def _korean_error_types(types):
     return ", ".join(dict.fromkeys(out))
 
 
-def save_review_xlsx(review_result, out_dir, cfg, log=print):
-    """프로그램 내부 오류 검토 결과를 사용자가 바로 열 수 있는 xlsx 표로 저장한다."""
+def _display_width(text):
+    """열 폭 산정용 표시 폭(한글 등 전각 문자는 2로 계산)."""
+    return sum(2 if ord(ch) > 0x2E80 else 1 for ch in str(text))
+
+
+def save_review_xlsx(review_result, out_dir, log=print):
+    """프로그램 내부 오류 검토 결과를 사용자가 바로 열 수 있는 xlsx 표로 저장한다.
+
+    openpyxl 로 직접 작성하므로 Excel(COM) 없이도 동작한다(--review 단독 실행 포함)."""
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, REVIEW_XLSX_NAME)
     headers = ["검토방식", "출력물 위치", "오류형태", "오류내용", "원본위치"]
@@ -127,48 +138,39 @@ def save_review_xlsx(review_result, out_dir, cfg, log=print):
     if not rows:
         rows.append([method, "", "이상 없음", "검토 결과 발견된 오류가 없습니다.", ""])
 
-    with ExcelApp() as xl:
-        app = xl.app
-        wb = app.Workbooks.Add()
-        try:
-            ws = wb.Worksheets(1)
-            ws.Name = "출력물 오류 검토결과"
-            while wb.Worksheets.Count > 1:
-                wb.Worksheets(wb.Worksheets.Count).Delete()
-            for col, header in enumerate(headers, start=1):
-                cell = ws.Cells(1, col)
-                cell.Value = header
-                cell.Font.Bold = True
-                cell.Interior.Color = 0xD9EAF7
-            for r, row in enumerate(rows, start=2):
-                for c, value in enumerate(row, start=1):
-                    ws.Cells(r, c).Value = value
-            ws.Columns("A:E").EntireColumn.AutoFit()
-            try:
-                ws.Range("A1:E1").AutoFilter()
-                ws.Activate()
-                ws.Range("A2").Select()
-                app.ActiveWindow.FreezePanes = True
-            except Exception:
-                pass
-            if os.path.exists(path):
-                try:
-                    os.remove(path)
-                except Exception:
-                    pass
-            wb.SaveAs(path, FileFormat=XL_OPENXML_WORKBOOK)
-        finally:
-            wb.Close(SaveChanges=False)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "출력물 오류 검토결과"
+    header_fill = PatternFill("solid", fgColor="D9EAF7")
+    for col, header in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.font = Font(bold=True)
+        cell.fill = header_fill
+    for r, row in enumerate(rows, start=2):
+        for c, value in enumerate(row, start=1):
+            ws.cell(row=r, column=c, value=value)
+    for col in range(1, len(headers) + 1):
+        widths = [_display_width(headers[col - 1])]
+        widths += [_display_width(row[col - 1]) for row in rows]
+        ws.column_dimensions[get_column_letter(col)].width = min(80, max(widths) + 3)
+    ws.auto_filter.ref = f"A1:E{len(rows) + 1}"
+    ws.freeze_panes = "A2"
+    wb.save(path)
     log(f"출력물 오류 검토결과 Excel: {path}")
     return path
 
 
-def backup_root(root, suffix, log):
+def backup_root(root, suffix, log, output_dir_name="_output"):
     ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     dst = root.rstrip("\\/") + f"{suffix}_{ts}"
     log(f"원본 백업 생성 중: {dst}")
+    # 백업 목적은 '원본 엑셀' 보호 — 이전 실행이 남긴 산출물은 백업에서 제외한다.
     shutil.copytree(root, dst,
-                    ignore=shutil.ignore_patterns("_output", "*_backup_*", "~$*"))
+                    ignore=shutil.ignore_patterns(
+                        output_dir_name, "*_backup_*", "~$*",
+                        "manifest.json", "process_report.json",
+                        "cell_issues_*.json", "review_*.json",
+                        REVIEW_XLSX_NAME, "*.pdf"))
     return dst
 
 
@@ -182,11 +184,12 @@ def run(root, no_backup=False, out_path=None, log=print) -> int:
     patterns = compile_exclude_patterns(cfg["exclude_sheet_patterns"])
 
     # 출력 위치: 사용자가 '출력 PDF'를 지정하면 그 폴더에 모든 산출물(PDF/manifest/리포트)을 둔다.
+    # 기본은 루트\<output_dir_name>\ — 원본 폴더를 어지럽히지 않고, 백업/재실행 시 누적도 막는다.
     if out_path:
         out_path = _normalize_pdf_path(out_path)
         out_root = os.path.dirname(out_path)
     else:
-        out_root = root
+        out_root = os.path.join(root, cfg.get("output_dir_name", "_output"))
         out_path = os.path.join(out_root, cfg.get("output_pdf_name", "수량산출서 output.pdf"))
 
     log("출력물 오류 검토: 프로그램 내부 로직 사용")
@@ -194,7 +197,8 @@ def run(root, no_backup=False, out_path=None, log=print) -> int:
     # [0] 백업
     if cfg.get("backup", True) and not no_backup:
         try:
-            backup_root(root, cfg.get("backup_suffix", "_backup"), log)
+            backup_root(root, cfg.get("backup_suffix", "_backup"), log,
+                        cfg.get("output_dir_name", "_output"))
         except Exception as e:
             log(f"[오류] 백업 실패로 중단(원본 보호): {e}")
             return 3
@@ -203,7 +207,8 @@ def run(root, no_backup=False, out_path=None, log=print) -> int:
 
     # [1] 구조 스캔
     events = structure_mod.scan(root, cfg["extensions"],
-                                cfg["output_dir_name"], cfg.get("backup_suffix", "_backup"))
+                                cfg["output_dir_name"], cfg.get("backup_suffix", "_backup"),
+                                skip_names={REVIEW_XLSX_NAME})
     log("구조 파악: " + structure_mod.summarize(events))
     if not any(e["type"] == "file" for e in events):
         log("[경고] 처리할 엑셀 파일이 없습니다.")
@@ -235,15 +240,19 @@ def run(root, no_backup=False, out_path=None, log=print) -> int:
                 continue
             try:
                 pr = prep_mod.prep_workbook(app, wb, patterns,
-                                            cfg.get("set_print_area_if_missing", True))
+                                            cfg.get("set_print_area_if_missing", False))
                 # 셀 표시 오류(###/수식오류) 결정론적 탐지 (워크북 열린 상태에서)
                 if detect_on:
                     for sname in pr["included"]:
                         try:
-                            issues = detect_mod.scan_sheet_issues(wb.Worksheets(sname))
+                            issues, truncated = detect_mod.scan_sheet_issues(
+                                wb.Worksheets(sname))
                         except Exception as e:
                             log(f"    [경고] 셀 탐지 실패({sname}): {e}")
                             continue
+                        if truncated:
+                            log(f"    [경고] 셀 탐지 상한 도달({sname}): "
+                                "시트가 매우 커서 일부 셀은 검사되지 않았습니다.")
                         for it in issues:
                             it["file"] = ev["relpath"]
                             cell_findings.append(it)
@@ -326,7 +335,7 @@ def run(root, no_backup=False, out_path=None, log=print) -> int:
     rev_path = os.path.join(out_root, f"review_{stamp}.json")
     with open(rev_path, "w", encoding="utf-8") as f:
         json.dump(rev, f, ensure_ascii=False, indent=2)
-    xlsx_path = save_review_xlsx(rev, out_root, cfg, log=log)
+    xlsx_path = save_review_xlsx(rev, out_root, log=log)
     log(f"이상 의심: {rev['issue_count']}건 ({rev['mode']})  → {rev_path}")
     log(f"검토 결과표: {xlsx_path}")
     for fnd in rev["findings"][:10]:
@@ -335,30 +344,50 @@ def run(root, no_backup=False, out_path=None, log=print) -> int:
     return 0
 
 
+def _find_review_pdf(folder, cfg):
+    """폴더에서 검토 대상 통합 PDF를 찾는다. 설정된 출력 파일명을 최우선으로 매칭."""
+    exact = os.path.join(folder, cfg.get("output_pdf_name", "수량산출서 output.pdf"))
+    if os.path.isfile(exact):
+        return exact
+    try:
+        cands = [f for f in os.listdir(folder) if f.lower().endswith(".pdf")]
+    except Exception:
+        return None
+    if not cands:
+        return None
+    merged = [f for f in cands if "output" in f.lower() or "통합" in f] or cands
+    return os.path.join(folder, sorted(merged)[0])
+
+
 def run_review_only(target, log=print) -> int:
     """이미 생성된 통합 PDF에 대해 프로그램 내부 오류 검토만 수행."""
     target = os.path.abspath(target)
     if os.path.isdir(target):
-        cands = [f for f in os.listdir(target) if f.lower().endswith(".pdf")]
-        merged = [f for f in cands if "통합" in f] or cands
-        if not merged:
+        cfg = load_settings(target)
+        # 지정 폴더 → 그 아래 산출물 폴더(_output) 순으로 통합 PDF를 찾는다.
+        pdf = _find_review_pdf(target, cfg)
+        if not pdf:
+            sub = os.path.join(target, cfg.get("output_dir_name", "_output"))
+            if os.path.isdir(sub):
+                pdf = _find_review_pdf(sub, cfg)
+        if not pdf:
             log(f"[오류] 검토할 PDF를 찾을 수 없습니다: {target}")
             return 2
-        pdf = os.path.join(target, sorted(merged)[0])
-        out_dir = target
+        out_dir = os.path.dirname(pdf)
     else:
         pdf = target
         out_dir = os.path.dirname(pdf)
+        cfg = load_settings(out_dir)
     if not os.path.isfile(pdf):
         log(f"[오류] PDF 없음: {pdf}")
         return 2
 
-    cfg = load_settings(out_dir)
     manifest = []
     mpath = os.path.join(out_dir, "manifest.json")
     if os.path.isfile(mpath):
         try:
-            manifest = json.load(open(mpath, encoding="utf-8"))
+            with open(mpath, encoding="utf-8") as f:
+                manifest = json.load(f)
         except Exception:
             pass
     else:
@@ -370,7 +399,7 @@ def run_review_only(target, log=print) -> int:
     rev_path = os.path.join(out_dir, f"review_{stamp}.json")
     with open(rev_path, "w", encoding="utf-8") as f:
         json.dump(rev, f, ensure_ascii=False, indent=2)
-    xlsx_path = save_review_xlsx(rev, out_dir, cfg, log=log)
+    xlsx_path = save_review_xlsx(rev, out_dir, log=log)
     log("")
     log("===== 검토 완료 =====")
     log(f"이상 의심: {rev['issue_count']}건 ({rev['mode']}) → {rev_path}")
@@ -386,7 +415,7 @@ def main(argv=None) -> int:
         prog="수량산출서 출력 자동화 도구",
         description="루트 폴더의 모든 시트를 폴더·파일 순서로 단일 PDF(간지 포함)로 병합합니다.")
     p.add_argument("input", nargs="?", help="수량산출서 루트 폴더")
-    p.add_argument("--out", help="출력 PDF 경로(기본: 루트\\수량산출서 output.pdf)")
+    p.add_argument("--out", help="출력 PDF 경로(기본: 루트\\_output\\수량산출서 output.pdf)")
     p.add_argument("--review", help="기존 통합 PDF(또는 출력 폴더)에 대해 오류 검토만 수행")
     p.add_argument("--no-backup", action="store_true", help="원본 백업 생략(주의)")
     args = p.parse_args(argv)

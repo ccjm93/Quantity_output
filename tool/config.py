@@ -12,18 +12,14 @@ import re
 
 # ---- Excel COM 상수 (gencache 없이 직접 사용) ----
 XL_TYPE_PDF = 0
-XL_PAPER_A4 = 9
 MSO_AUTOMATION_SECURITY_FORCE_DISABLE = 3
 XL_CALC_MANUAL = -4135
 XL_SHEET_VISIBLE = -1
 XL_VIEW_PAGEBREAK_PREVIEW = 2   # ActiveWindow.View = xlPageBreakPreview
-XL_VIEW_NORMAL = 1
-XL_OPENXML_WORKBOOK = 51        # .xlsx
 
 # ---- SpecialCells (셀 표시 오류 탐지용) ----
 XL_CELLTYPE_CONSTANTS = 2       # xlCellTypeConstants
 XL_CELLTYPE_FORMULAS = -4123    # xlCellTypeFormulas
-XL_NUMBERS = 1                  # xlNumbers
 XL_ERRORS = 16                  # xlErrors
 
 # ---- 용지(간지 페이지용, 포인트) ----
@@ -31,11 +27,9 @@ A4_WIDTH_PT = 595.0
 A4_HEIGHT_PT = 842.0
 
 DEFAULTS = {
-    # 산출물 폴더 (입력 루트 기준 상대, 절대경로면 그대로)
+    # 산출물 폴더명 (입력 루트 아래에 생성, 모든 산출물이 여기에 모임)
     "output_dir_name": "_output",
-    # 통합 PDF 파일명 접미 (앞에 루트 폴더명이 붙음)
-    "merged_suffix": "_통합.pdf",
-    # 기본 통합 PDF 파일명 (출력 대상 폴더 안에 저장)
+    # 기본 통합 PDF 파일명 (산출물 폴더 안에 저장)
     "output_pdf_name": "수량산출서 output.pdf",
     # 원본 변경 전 자동 백업 (원본에 PBP 저장하므로 기본 ON)
     "backup": True,

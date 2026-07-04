@@ -38,11 +38,9 @@ def _is_dark(samples, idx):
     return samples[idx] < 90 and samples[idx + 1] < 90 and samples[idx + 2] < 90
 
 
-def _blank_page_finding(page, page_text, page_no, manifest_by_page, cfg):
+def _blank_page_finding(pix, page_text, page_no, manifest_by_page):
     if page_text.strip():
         return None
-    dpi = int(cfg.get("rule_dpi", 100))
-    pix = page.get_pixmap(dpi=dpi, alpha=False)
     w, h, n = pix.width, pix.height, pix.n
     if n < 3:
         return None
@@ -80,10 +78,8 @@ def _groups(values):
     return groups
 
 
-def _bottom_border_finding(page, page_no, manifest_by_page, cfg):
+def _bottom_border_finding(pix, page_no, manifest_by_page):
     """페이지 하단에서 표 세로선은 이어지지만 닫는 가로선이 약한 경우를 휴리스틱으로 탐지."""
-    dpi = int(cfg.get("rule_dpi", 100))
-    pix = page.get_pixmap(dpi=dpi, alpha=False)
     w, h, n = pix.width, pix.height, pix.n
     if n < 3 or w < 80 or h < 120:
         return None
@@ -146,18 +142,21 @@ def _bottom_border_finding(page, page_no, manifest_by_page, cfg):
 
 def _rule_scan(doc, manifest_by_page, cfg, log):
     findings = []
+    dpi = int(cfg.get("rule_dpi", 100))
     for i in range(doc.page_count):
         page_no = i + 1
         if page_no % 20 == 0:
             log(f"  출력물 검토 진행 {page_no}/{doc.page_count}...")
         page = doc.load_page(i)
         page_text = page.get_text()
-        blank = _blank_page_finding(page, page_text, page_no, manifest_by_page, cfg)
+        # 렌더링은 페이지당 1회만 — 빈 페이지/하단 테두리 검사가 공유한다.
+        pix = page.get_pixmap(dpi=dpi, alpha=False)
+        blank = _blank_page_finding(pix, page_text, page_no, manifest_by_page)
         if blank:
             findings.append(blank)
             continue
         findings.extend(_text_findings(page_text, page_no, manifest_by_page))
-        border = _bottom_border_finding(page, page_no, manifest_by_page, cfg)
+        border = _bottom_border_finding(pix, page_no, manifest_by_page)
         if border:
             findings.append(border)
     log(f"  프로그램 검토 완료: 이상 의심 {len(findings)}건")

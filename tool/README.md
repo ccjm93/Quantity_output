@@ -36,7 +36,8 @@
 ```bash
 python tool/toolruntime.py "수량산출서_루트폴더"
 python tool/toolruntime.py "루트" --no-backup     # 원본 백업 생략(주의)
-python tool/toolruntime.py --review "루트\수량산출서 output.pdf"
+python tool/toolruntime.py --review "루트"        # 루트(또는 루트\_output)의 통합 PDF 검토
+python tool/toolruntime.py --review "루트\_output\수량산출서 output.pdf"
 ```
 
 ## 사용법 (GUI)
@@ -47,13 +48,15 @@ python tool/toolruntime.py --review "루트\수량산출서 output.pdf"
 
 ## 결과물
 
-- `루트\수량산출서 output.pdf` — **단일 병합 PDF**
-- `루트\manifest.json` — 페이지↔폴더/파일/시트 매핑
-- `루트\cell_issues_<시각>.json` — 셀 표시 오류(`##` 이상 / `#REF!` / 수식오류) 위치
-- `루트\review_<시각>.json` — 프로그램 오류 검토 결과
-- `루트\출력물 오류 검토결과.xlsx` — 사용자가 확인할 검토 결과표
-- `루트\process_report.json` — 파일별 포함/제외 내역
-- `루트_backup_<시각>\` — 원본 백업
+모든 산출물은 `루트\_output\` 폴더에 모입니다 (`--out` 지정 시 그 폴더).
+
+- `루트\_output\수량산출서 output.pdf` — **단일 병합 PDF**
+- `루트\_output\manifest.json` — 페이지↔폴더/파일/시트 매핑
+- `루트\_output\cell_issues_<시각>.json` — 셀 표시 오류(`##` 이상 / `#REF!` / 수식오류) 위치
+- `루트\_output\review_<시각>.json` — 프로그램 오류 검토 결과
+- `루트\_output\출력물 오류 검토결과.xlsx` — 사용자가 확인할 검토 결과표
+- `루트\_output\process_report.json` — 파일별 포함/제외 내역
+- `루트_backup_<시각>\` — 원본 백업 (산출물 폴더/PDF/JSON 리포트는 백업에서 제외)
 
 ## 중요 주의
 

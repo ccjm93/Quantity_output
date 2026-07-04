@@ -45,7 +45,7 @@ class App:
                   command=self.pick_folder).grid(row=0, column=1, **pad)
         frm.columnconfigure(0, weight=1)
 
-        frm2 = tk.LabelFrame(root, text=" 출력 PDF (비우면 선택 폴더\\수량산출서 output.pdf) ")
+        frm2 = tk.LabelFrame(root, text=" 출력 PDF (비우면 선택 폴더\\_output\\수량산출서 output.pdf) ")
         frm2.pack(fill="x", padx=12, pady=4)
         self.out_var = tk.StringVar()
         tk.Entry(frm2, textvariable=self.out_var).grid(row=0, column=0, sticky="we", **pad)
@@ -67,7 +67,7 @@ class App:
                                  command=self.start)
         self.run_btn.pack(side="left")
         self.review_btn = tk.Button(frm4, text="출력물 오류 검토", height=2,
-                                    state="disabled", command=self.start_review)
+                                    command=self.start_review)
         self.review_btn.pack(side="left", padx=8)
         self.open_btn = tk.Button(frm4, text="출력 폴더 열기", height=2,
                                   state="disabled", command=self.open_output)
@@ -102,9 +102,10 @@ class App:
     def _expected_pdf(self, target):
         if self.out_var.get().strip():
             return self._normalize_pdf_path(self.out_var.get().strip())
-        # toolruntime 과 동일하게 설정값에서 출력 폴더명/접미사를 읽어 경로를 맞춘다.
+        # toolruntime 과 동일하게 설정값에서 산출물 폴더명/파일명을 읽어 경로를 맞춘다.
         cfg = load_settings(target)
-        return os.path.join(target, cfg.get("output_pdf_name", "수량산출서 output.pdf"))
+        return os.path.join(target, cfg.get("output_dir_name", "_output"),
+                            cfg.get("output_pdf_name", "수량산출서 output.pdf"))
 
     def _normalize_pdf_path(self, path):
         path = os.path.abspath(path)
@@ -133,9 +134,14 @@ class App:
         threading.Thread(target=self._worker, args=(cmd, "generate"), daemon=True).start()
 
     def start_review(self):
+        # 이번 세션에서 생성한 PDF가 없으면(예: 프로그램 재시작 후) 직접 선택해 검토한다.
         if not self._last_pdf or not os.path.isfile(self._last_pdf):
-            messagebox.showinfo("안내", "먼저 PDF를 생성하세요.")
-            return
+            p = filedialog.askopenfilename(title="검토할 통합 PDF 선택",
+                                           filetypes=[("PDF", "*.pdf")])
+            if not p:
+                return
+            self._last_pdf = p
+            self._last_out = os.path.dirname(p)
         cmd = [sys.executable, "-u", os.path.join(HERE, "toolruntime.py"),
                "--review", self._last_pdf]
         self._busy("출력물 오류 검토 시작...\n\n")
@@ -177,7 +183,7 @@ class App:
                     pdf_ok = bool(self._last_pdf and os.path.isfile(self._last_pdf))
                     out_ok = bool(self._last_out and os.path.isdir(self._last_out))
                     self.open_btn.config(state="normal" if out_ok else "disabled")
-                    self.review_btn.config(state="normal" if pdf_ok else "disabled")
+                    self.review_btn.config(state="normal")
                     if code == 0 and mode == "generate":
                         self._log("\n=== PDF 생성 완료 ===\n")
                         if pdf_ok:

@@ -35,7 +35,7 @@ def _has_content(ws) -> bool:
         return True
 
 
-def prep_workbook(app, wb, patterns, set_pa_if_missing=True) -> dict:
+def prep_workbook(app, wb, patterns, set_pa_if_missing=False) -> dict:
     """Returns {included:[names], excluded:[(name,reason)]}."""
     result = {"included": [], "excluded": []}
     changed = False

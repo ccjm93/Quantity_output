@@ -19,17 +19,21 @@ def natural_key(s: str):
     return [int(t) if t.isdigit() else t.lower() for t in _num.split(s)]
 
 
-def _is_skip(name: str, output_dir_name: str, backup_suffix: str) -> bool:
+def _is_skip(name: str, output_dir_name: str, backup_suffix: str,
+             skip_names=()) -> bool:
     if name.startswith("~$") or name.startswith("."):
         return True
     if name == output_dir_name:
         return True
     if backup_suffix and backup_suffix in name:
         return True
+    if name in skip_names:  # 도구 자신이 만든 산출물(검토 결과표 등)은 입력으로 취급하지 않음
+        return True
     return False
 
 
-def scan(root: str, extensions, output_dir_name="_output", backup_suffix="_backup"):
+def scan(root: str, extensions, output_dir_name="_output", backup_suffix="_backup",
+         skip_names=()):
     root = os.path.abspath(root)
     exts = tuple(e.lower() for e in extensions)
     events = []
@@ -42,7 +46,7 @@ def scan(root: str, extensions, output_dir_name="_output", backup_suffix="_backu
         dirs, files = [], []
         for e in entries:
             full = os.path.join(folder, e)
-            if _is_skip(e, output_dir_name, backup_suffix):
+            if _is_skip(e, output_dir_name, backup_suffix, skip_names):
                 continue
             if os.path.isdir(full):
                 dirs.append(e)

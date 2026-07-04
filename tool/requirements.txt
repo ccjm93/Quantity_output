@@ -1,3 +1,4 @@
 # 필수
 pywin32>=305
 pymupdf>=1.24
+openpyxl>=3.1

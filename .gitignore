@@ -1,5 +1,6 @@
 # ===== 고객 자료(수량산출서 원본) 절대 커밋 금지 =====
 01 수량_가야/
+샘플/
 */_output/
 _output/
 
@@ -12,6 +13,14 @@ _output/
 __pycache__/
 *.pyc
 *.pyo
+
+# 도구 실행 산출물 (_output 밖에 생성된 경우 대비)
+manifest.json
+process_report.json
+cell_issues_*.json
+review_*.json
+출력물 오류 검토결과.xlsx
+수량산출서 output.pdf
 
 # ===== 도구/에디터 상태 =====
 .omc/

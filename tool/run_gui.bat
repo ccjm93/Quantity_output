@@ -8,9 +8,10 @@ if exist "%LOCAL_PYTHONW%" (
     exit /b
 )
 
-where py >nul 2>nul
+rem pyw = py 런처의 콘솔 없는(windowed) 버전
+where pyw >nul 2>nul
 if %errorlevel%==0 (
-    start "" py -3w "gui.py"
+    start "" pyw -3 "gui.py"
     exit /b
 )
 

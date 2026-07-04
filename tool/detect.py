@@ -60,8 +60,12 @@ def _special(ws, ctype, value):
 _MAX_CELLS_PER_SHEET = 30000
 
 
-def scan_sheet_issues(ws) -> list:
-    """Returns [{sheet, cell, kind, text}]  (kind: 'overflow' | 'ref_error' | 'error').
+def scan_sheet_issues(ws) -> tuple:
+    """Returns (findings, truncated).
+
+    findings: [{sheet, cell, kind, text}]  (kind: 'overflow' | 'ref_error' | 'error')
+    truncated: 시트가 셀 스캔 예산(_MAX_CELLS_PER_SHEET)을 초과해 일부만 검사됐으면 True.
+               호출 측은 이를 '발견 없음'과 구분해 사용자에게 알려야 한다.
 
     주의: 이 탐지는 셀의 '표시 텍스트(Range.Text)'가 ###/오류일 때만 잡는다.
     그림/단면도 안의 숫자가 '출력 배율' 때문에 ###로 찌그러지는 경우는 셀 값 자체가
@@ -94,7 +98,7 @@ def scan_sheet_issues(ws) -> list:
         for cell in _iter_cells(rng):
             budget -= 1
             if budget < 0:
-                return findings
+                return findings, True
             try:
                 t = (cell.Text or "").strip()
             except Exception:
@@ -103,11 +107,13 @@ def scan_sheet_issues(ws) -> list:
                 _add(cell, "overflow", t)
 
     # 2) 수식 오류 셀 — 실제로 '#...'를 '표시'하는 셀만(병합 빈칸 중복 제거)
+    truncated = False
     rng = _special(ws, XL_CELLTYPE_FORMULAS, XL_ERRORS)
     if rng is not None:
         for cell in _iter_cells(rng):
             budget -= 1
             if budget < 0:
+                truncated = True
                 break
             try:
                 t = (cell.Text or "").strip()
@@ -116,4 +122,4 @@ def scan_sheet_issues(ws) -> list:
             if t.startswith("#"):
                 _add(cell, "ref_error" if t.upper().startswith("#REF!") else "error", t)
 
-    return findings
+    return findings, truncated
