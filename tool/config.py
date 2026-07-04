@@ -19,6 +19,12 @@ XL_SHEET_VISIBLE = -1
 XL_VIEW_PAGEBREAK_PREVIEW = 2   # ActiveWindow.View = xlPageBreakPreview
 XL_VIEW_NORMAL = 1
 
+# ---- SpecialCells (셀 표시 오류 탐지용) ----
+XL_CELLTYPE_CONSTANTS = 2       # xlCellTypeConstants
+XL_CELLTYPE_FORMULAS = -4123    # xlCellTypeFormulas
+XL_NUMBERS = 1                  # xlNumbers
+XL_ERRORS = 16                  # xlErrors
+
 # ---- 용지(간지 페이지용, 포인트) ----
 A4_WIDTH_PT = 595.0
 A4_HEIGHT_PT = 842.0
@@ -39,6 +45,10 @@ DEFAULTS = {
     "divider_font": r"C:\Windows\Fonts\malgun.ttf",
     # AI 사후검토 모델
     "ai_model": "gemini-2.5-flash",
+    # AI 비전 렌더링 해상도(dpi). 높을수록 그림 속 작은 ###/잘림을 잘 인식.
+    "ai_dpi": 200,
+    # Excel 단계 셀 표시 오류(### 오버플로우 / 수식오류) 결정론적 탐지
+    "detect_cell_issues": True,
     # 처리 대상 확장자
     "extensions": [".xlsx", ".xlsm", ".xls"],
 }

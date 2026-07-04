@@ -29,6 +29,7 @@ except Exception:
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import detect as detect_mod  # noqa: E402
 import export as export_mod  # noqa: E402
 import prep as prep_mod  # noqa: E402
 import review as review_mod  # noqa: E402
@@ -73,6 +74,23 @@ def _load_dotenv(project_dir=None):
                         os.environ[k] = v
         except Exception:
             pass
+
+
+def _assign_pages(cell_findings, manifest):
+    """각 (file, sheet) 의 통합 PDF 첫 페이지를 구해 cell finding 에 page 를 부여한다."""
+    first_page = {}
+    for m in manifest:
+        if m.get("type") == "sheet":
+            key = (m.get("file"), m.get("sheet"))
+            p = m.get("page")
+            if key not in first_page or p < first_page[key]:
+                first_page[key] = p
+    for f in cell_findings:
+        f["page"] = first_page.get((f.get("file"), f.get("sheet")))
+        f["source"] = "excel"
+        f["types"] = ["열폭부족(###)" if f["kind"] == "overflow" else "수식오류"]
+        f["detail"] = f"{f.get('sheet')}!{f.get('cell')} → '{f.get('text')}'"
+    return cell_findings
 
 
 def backup_root(root, suffix, log):
@@ -131,6 +149,8 @@ def run(root, no_ai=False, no_backup=False, out_path=None, log=print) -> int:
     file_no = 0
     n_files = sum(1 for e in events if e["type"] == "file")
     report = {"root": root, "files": [], "errors": []}
+    detect_on = cfg.get("detect_cell_issues", True)
+    cell_findings = []  # [{file, sheet, cell, kind, text}] — Excel 단계 결정론 탐지
 
     # [2] COM 세션에서 파일별 처리
     with ExcelApp() as xl:
@@ -151,6 +171,23 @@ def run(root, no_ai=False, no_backup=False, out_path=None, log=print) -> int:
             try:
                 pr = prep_mod.prep_workbook(app, wb, patterns,
                                             cfg.get("set_print_area_if_missing", True))
+                # 셀 표시 오류(###/수식오류) 결정론적 탐지 (워크북 열린 상태에서)
+                if detect_on:
+                    for sname in pr["included"]:
+                        try:
+                            issues = detect_mod.scan_sheet_issues(wb.Worksheets(sname))
+                        except Exception as e:
+                            log(f"    [경고] 셀 탐지 실패({sname}): {e}")
+                            continue
+                        for it in issues:
+                            it["file"] = ev["relpath"]
+                            cell_findings.append(it)
+                    n_ov = sum(1 for f in cell_findings
+                               if f["file"] == ev["relpath"] and f["kind"] == "overflow")
+                    n_er = sum(1 for f in cell_findings
+                               if f["file"] == ev["relpath"] and f["kind"] == "error")
+                    if n_ov or n_er:
+                        log(f"    [탐지] 열폭부족(###) {n_ov}건, 수식오류 {n_er}건")
                 tmp_dir = os.path.join(tmp_root, f"f{file_no:04d}")
                 sheets = export_mod.export_sheets(wb, pr["included"], tmp_dir)
                 if sheets:
@@ -194,15 +231,35 @@ def run(root, no_ai=False, no_backup=False, out_path=None, log=print) -> int:
     except Exception:
         pass
 
-    # [4] AI 출력물 검토 (옵션) — 기본은 생략, --ai 지정 시에만 수행
+    # [3.5] Excel 단계 셀 표시 오류 — AI 사용 여부와 무관하게 항상 보고/저장
+    _assign_pages(cell_findings, manifest)
+    n_ov = sum(1 for f in cell_findings if f["kind"] == "overflow")
+    n_er = sum(1 for f in cell_findings if f["kind"] == "error")
     log("")
     log("===== PDF 생성 완료 =====")
     log(f"단일 PDF: {out_path}")
+    if cell_findings:
+        stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        ci_path = os.path.join(out_root, f"cell_issues_{stamp}.json")
+        with open(ci_path, "w", encoding="utf-8") as f:
+            json.dump({"overflow": n_ov, "error": n_er,
+                       "findings": cell_findings}, f, ensure_ascii=False, indent=2)
+        log(f"셀 표시 오류: 열폭부족(###) {n_ov}건, 수식오류 {n_er}건  → {ci_path}")
+        for fnd in cell_findings[:15]:
+            log(f"  p.{fnd.get('page')} | {fnd.get('file')} > {fnd.get('sheet')}"
+                f"!{fnd.get('cell')} | {fnd['types'][0]} '{fnd.get('text')}'")
+    else:
+        log("셀 표시 오류(###/수식오류): 발견 없음")
+    log("  ※ 단, 그림/단면도 안 숫자가 '출력 배율'로 ###처럼 찌그러지는 건 셀 값은 정상이라")
+    log("     이 탐지로는 안 잡힙니다. 그런 경우는 시각/AI 검토로 확인하세요.")
+
+    # [4] AI 출력물 검토 (옵션) — 기본은 생략, --ai 지정 시에만 수행
     if no_ai:
         log("AI 출력물 검토는 생략됨 (완료 후 'AI 출력물 검토'로 실행).")
         return 0
 
-    rev = review_mod.review(out_path, manifest, cfg, no_ai=False, log=log)
+    rev = review_mod.review(out_path, manifest, cfg, no_ai=False, log=log,
+                            extra_findings=cell_findings)
     stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     rev_path = os.path.join(out_root, f"review_{stamp}.json")
     with open(rev_path, "w", encoding="utf-8") as f:
