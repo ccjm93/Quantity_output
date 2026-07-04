@@ -18,6 +18,7 @@ XL_CALC_MANUAL = -4135
 XL_SHEET_VISIBLE = -1
 XL_VIEW_PAGEBREAK_PREVIEW = 2   # ActiveWindow.View = xlPageBreakPreview
 XL_VIEW_NORMAL = 1
+XL_OPENXML_WORKBOOK = 51        # .xlsx
 
 # ---- SpecialCells (셀 표시 오류 탐지용) ----
 XL_CELLTYPE_CONSTANTS = 2       # xlCellTypeConstants
@@ -34,6 +35,8 @@ DEFAULTS = {
     "output_dir_name": "_output",
     # 통합 PDF 파일명 접미 (앞에 루트 폴더명이 붙음)
     "merged_suffix": "_통합.pdf",
+    # 기본 통합 PDF 파일명 (출력 대상 폴더 안에 저장)
+    "output_pdf_name": "수량산출서 output.pdf",
     # 원본 변경 전 자동 백업 (원본에 PBP 저장하므로 기본 ON)
     "backup": True,
     "backup_suffix": "_backup",
@@ -43,10 +46,8 @@ DEFAULTS = {
     "set_print_area_if_missing": False,
     # 간지 한글 폰트
     "divider_font": r"C:\Windows\Fonts\malgun.ttf",
-    # AI 사후검토 모델
-    "ai_model": "gemini-2.5-flash",
-    # AI 비전 렌더링 해상도(dpi). 높을수록 그림 속 작은 ###/잘림을 잘 인식.
-    "ai_dpi": 200,
+    # 출력물 이미지 검토 해상도(dpi). 높을수록 하단 테두리 휴리스틱이 촘촘해짐.
+    "rule_dpi": 100,
     # Excel 단계 셀 표시 오류(### 오버플로우 / 수식오류) 결정론적 탐지
     "detect_cell_issues": True,
     # 처리 대상 확장자

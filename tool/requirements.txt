@@ -1,6 +1,3 @@
 # 필수
 pywin32>=305
 pymupdf>=1.24
-
-# 선택 (AI 사후검토용 / 없어도 규칙 기반 검토로 PDF 정상 생성)
-google-genai>=0.3

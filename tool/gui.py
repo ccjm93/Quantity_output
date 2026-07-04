@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """수량산출서 출력 자동화 도구 - GUI (단일 PDF 병합판, Tkinter 내장).
 
-직원용: 수량산출서 '루트 폴더' 선택 → [PDF 생성 시작] → 간지 포함 단일 PDF + AI 사후검토.
+직원용: 수량산출서 '루트 폴더' 선택 → [PDF 생성 시작] → 간지 포함 단일 PDF + 오류 검토.
 처리는 toolruntime.py 를 별도 프로세스로 실행하고 로그를 실시간 표시한다.
 """
 from __future__ import annotations
@@ -19,78 +19,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 from config import load_settings  # noqa: E402
-
-# API 키는 이 프로그램 폴더의 .env 에만 저장(프로그램 삭제 시 키도 사라짐).
-ENV_PATH = os.path.join(HERE, ".env")
-KEY_NAME = "GEMINI_API_KEY"
-
-
-def read_api_key() -> str:
-    if not os.path.isfile(ENV_PATH):
-        return ""
-    try:
-        with open(ENV_PATH, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith(KEY_NAME + "="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
-    except Exception:
-        pass
-    return ""
-
-
-def _read_env_lines() -> list:
-    if not os.path.isfile(ENV_PATH):
-        return []
-    try:
-        with open(ENV_PATH, "r", encoding="utf-8") as f:
-            return f.read().splitlines()
-    except Exception:
-        return []
-
-
-def save_api_key(key: str) -> None:
-    key = (key or "").strip()
-    lines = _read_env_lines()
-    out, found = [], False
-    for line in lines:
-        if line.strip().startswith(KEY_NAME + "="):
-            out.append(f"{KEY_NAME}={key}")
-            found = True
-        else:
-            out.append(line)
-    if not found:
-        out.append(f"{KEY_NAME}={key}")
-    with open(ENV_PATH, "w", encoding="utf-8") as f:
-        f.write("\n".join(out) + "\n")
-    if key:
-        os.environ[KEY_NAME] = key
-    else:
-        os.environ.pop(KEY_NAME, None)
-
-
-def delete_api_key() -> None:
-    lines = _read_env_lines()
-    out = [ln for ln in lines if not ln.strip().startswith(KEY_NAME + "=")]
-    try:
-        with open(ENV_PATH, "w", encoding="utf-8") as f:
-            f.write(("\n".join(out) + "\n") if out else "")
-    except Exception:
-        pass
-    os.environ.pop(KEY_NAME, None)
-
-
-def _ai_status():
-    # 무거운 toolruntime(→win32com/excel_app) 대신 .env 키만 환경에 반영하고
-    # review 만 가볍게 사용한다. 실패 시 라벨에 긴 트레이스가 노출되지 않도록 요약한다.
-    try:
-        key = read_api_key()
-        if key and not os.environ.get(KEY_NAME):
-            os.environ[KEY_NAME] = key
-        import review
-        return review.is_available(False)
-    except Exception as e:
-        return False, type(e).__name__
 
 
 class App:
@@ -117,7 +45,7 @@ class App:
                   command=self.pick_folder).grid(row=0, column=1, **pad)
         frm.columnconfigure(0, weight=1)
 
-        frm2 = tk.LabelFrame(root, text=" 출력 PDF (비우면 루트\\_output\\<폴더명>_통합.pdf) ")
+        frm2 = tk.LabelFrame(root, text=" 출력 PDF (비우면 선택 폴더\\수량산출서 output.pdf) ")
         frm2.pack(fill="x", padx=12, pady=4)
         self.out_var = tk.StringVar()
         tk.Entry(frm2, textvariable=self.out_var).grid(row=0, column=0, sticky="we", **pad)
@@ -129,11 +57,8 @@ class App:
         frm3.pack(fill="x", padx=12, pady=4)
         self.backup = tk.BooleanVar(value=True)
         tk.Checkbutton(frm3, text="원본 백업(권장)", variable=self.backup).pack(side="left")
-        self.ai_lbl = tk.Label(frm3, text="")
-        self.ai_lbl.pack(side="left", padx=10)
-        tk.Button(frm3, text="API 키 설정",
-                  command=self.open_apikey_dialog).pack(side="right", padx=6)
-        self.refresh_ai_status()
+        tk.Label(frm3, fg="#555",
+                 text="오류 검토는 프로그램 내부 로직으로 수행합니다.").pack(side="left", padx=10)
 
         frm4 = tk.Frame(root)
         frm4.pack(fill="x", padx=12, pady=(6, 2))
@@ -141,7 +66,7 @@ class App:
                                  fg="white", font=("맑은 고딕", 11, "bold"),
                                  command=self.start)
         self.run_btn.pack(side="left")
-        self.review_btn = tk.Button(frm4, text="AI 출력물 검토", height=2,
+        self.review_btn = tk.Button(frm4, text="출력물 오류 검토", height=2,
                                     state="disabled", command=self.start_review)
         self.review_btn.pack(side="left", padx=8)
         self.open_btn = tk.Button(frm4, text="출력 폴더 열기", height=2,
@@ -156,85 +81,6 @@ class App:
         self._log("준비 완료. 수량산출서 '루트 폴더'를 선택한 뒤 [PDF 생성 시작]을 누르세요.\n")
 
         self.root.after(120, self._drain)
-        self.root.after(500, self._first_run_prompt)
-
-    # --- API 키 ---
-    def refresh_ai_status(self):
-        ok, reason = _ai_status()
-        self.ai_lbl.config(text=("AI: 사용 가능" if ok else f"AI: 미설정 ({reason})"),
-                           fg=("#197" if ok else "#a60"))
-
-    def _first_run_prompt(self):
-        if read_api_key():
-            return
-        msg = ("이 프로그램은 키 없이도 PDF 생성이 정상 동작합니다.\n\n"
-               "최종 PDF의 'AI 사후검토(이상 탐지)'를 쓰려면 '개인' Google AI Studio "
-               "API 키가 필요합니다. 키는 이 PC의 프로그램 폴더에만 저장되며 다른 사람과 "
-               "공유되지 않습니다.\n\n지금 개인 API 키를 입력하시겠습니까?")
-        if messagebox.askyesno("개인 API 키 입력 (최초 실행)", msg):
-            self.open_apikey_dialog()
-
-    def show_apikey_help(self):
-        try:
-            import toolruntime
-            messagebox.showinfo("API 키 발급 방법", toolruntime.APIKEY_HELP)
-        except Exception as e:
-            messagebox.showerror("오류", str(e))
-
-    def open_apikey_dialog(self):
-        dlg = tk.Toplevel(self.root)
-        dlg.title("API 키 설정")
-        dlg.transient(self.root)
-        dlg.grab_set()
-        dlg.resizable(False, False)
-        tk.Label(dlg, text="Google AI Studio API 키",
-                 font=("맑은 고딕", 11, "bold")).pack(anchor="w", padx=14, pady=(12, 2))
-        tk.Label(dlg, fg="#555", justify="left",
-                 text=("최종 PDF 사후검토 품질 향상용(선택).\n"
-                       "키는 이 프로그램 폴더(tool\\.env)에만 저장되며,\n"
-                       "프로그램을 삭제하면 키도 함께 사라집니다.")
-                 ).pack(anchor="w", padx=14)
-        key_var = tk.StringVar(value=read_api_key())
-        show_var = tk.BooleanVar(value=False)
-        row = tk.Frame(dlg)
-        row.pack(fill="x", padx=14, pady=(10, 2))
-        ent = tk.Entry(row, textvariable=key_var, width=46, show="*")
-        ent.pack(side="left", fill="x", expand=True)
-
-        def toggle():
-            ent.config(show="" if show_var.get() else "*")
-        tk.Checkbutton(dlg, text="키 표시", variable=show_var,
-                       command=toggle).pack(anchor="w", padx=12)
-
-        btns = tk.Frame(dlg)
-        btns.pack(fill="x", padx=14, pady=12)
-
-        def do_save():
-            k = key_var.get().strip()
-            if not k:
-                messagebox.showwarning("경고", "키를 입력하세요.", parent=dlg)
-                return
-            save_api_key(k)
-            self.refresh_ai_status()
-            messagebox.showinfo("완료", "API 키가 저장되었습니다.", parent=dlg)
-            dlg.destroy()
-
-        def do_delete():
-            if not read_api_key():
-                messagebox.showinfo("안내", "저장된 키가 없습니다.", parent=dlg)
-                return
-            if messagebox.askyesno("확인", "저장된 API 키를 삭제할까요?", parent=dlg):
-                delete_api_key()
-                self.refresh_ai_status()
-                dlg.destroy()
-
-        tk.Button(btns, text="저장", width=10, bg="#2d7", fg="white",
-                  command=do_save).pack(side="left")
-        tk.Button(btns, text="키 삭제", width=10, command=do_delete).pack(side="left", padx=6)
-        tk.Button(btns, text="발급 방법", width=10,
-                  command=self.show_apikey_help).pack(side="left")
-        tk.Button(btns, text="닫기", width=8, command=dlg.destroy).pack(side="right")
-        ent.focus_set()
 
     # --- 실행 ---
     def pick_folder(self):
@@ -255,11 +101,16 @@ class App:
 
     def _expected_pdf(self, target):
         if self.out_var.get().strip():
-            return os.path.abspath(self.out_var.get().strip())
+            return self._normalize_pdf_path(self.out_var.get().strip())
         # toolruntime 과 동일하게 설정값에서 출력 폴더명/접미사를 읽어 경로를 맞춘다.
         cfg = load_settings(target)
-        name = os.path.basename(target.rstrip("\\/")) + cfg["merged_suffix"]
-        return os.path.join(target, cfg["output_dir_name"], name)
+        return os.path.join(target, cfg.get("output_pdf_name", "수량산출서 output.pdf"))
+
+    def _normalize_pdf_path(self, path):
+        path = os.path.abspath(path)
+        if os.path.splitext(path)[1].lower() != ".pdf":
+            path += ".pdf"
+        return path
 
     def start(self):
         target = self.path_var.get().strip()
@@ -270,10 +121,10 @@ class App:
             if not messagebox.askyesno(
                     "주의", "원본 백업 없이 진행하면 원본 파일이 변경됩니다.\n계속할까요?"):
                 return
-        # PDF 생성만 수행 (AI 검토는 완료 후 'AI 출력물 검토' 버튼으로 선택 실행)
+        # PDF 생성만 수행 (오류 검토는 완료 후 '출력물 오류 검토' 버튼으로 선택 실행)
         cmd = [sys.executable, "-u", os.path.join(HERE, "toolruntime.py"), target]
         if self.out_var.get().strip():
-            cmd += ["--out", self.out_var.get().strip()]
+            cmd += ["--out", self._normalize_pdf_path(self.out_var.get().strip())]
         if not self.backup.get():
             cmd += ["--no-backup"]
         self._last_pdf = self._expected_pdf(target)
@@ -285,13 +136,9 @@ class App:
         if not self._last_pdf or not os.path.isfile(self._last_pdf):
             messagebox.showinfo("안내", "먼저 PDF를 생성하세요.")
             return
-        ok, reason = _ai_status()
-        if not ok and not messagebox.askyesno(
-                "안내", f"AI 키가 없어 규칙 기반 검토만 됩니다 ({reason}).\n계속할까요?"):
-            return
         cmd = [sys.executable, "-u", os.path.join(HERE, "toolruntime.py"),
                "--review", self._last_pdf]
-        self._busy("AI 출력물 검토 시작...\n\n")
+        self._busy("출력물 오류 검토 시작...\n\n")
         threading.Thread(target=self._worker, args=(cmd, "review"), daemon=True).start()
 
     def _busy(self, msg):
@@ -334,9 +181,9 @@ class App:
                     if code == 0 and mode == "generate":
                         self._log("\n=== PDF 생성 완료 ===\n")
                         if pdf_ok:
-                            self._log("필요하면 [AI 출력물 검토]를 눌러 추가 검토하세요.\n")
+                            self._log("필요하면 [출력물 오류 검토]를 눌러 추가 검토하세요.\n")
                     elif code == 0 and mode == "review":
-                        self._log("\n=== AI 출력물 검토 완료 ===\n")
+                        self._log("\n=== 출력물 오류 검토 완료 ===\n")
                     else:
                         self._log(f"\n=== 종료(코드 {code}) ===\n")
         except queue.Empty:

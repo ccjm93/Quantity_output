@@ -2,13 +2,11 @@
 """수량산출서 출력 자동화 도구 - CLI / 오케스트레이션 (단일 PDF 병합판).
 
 흐름: 백업 → 구조 스캔 → 파일별(PBP 활성화+원본저장 → 시트별 임시 PDF)
-      → 간지 포함 단일 PDF 병합 → AI 사후검토 → 산출물 저장.
+      → 간지 포함 단일 PDF 병합 → 프로그램 내부 오류 검토 → 산출물 저장.
 
 사용 예:
   python tool/toolruntime.py "01 수량_가야"
-  python tool/toolruntime.py "루트" --no-ai          # AI 검토 생략
   python tool/toolruntime.py "루트" --no-backup       # 원본 백업 생략(주의)
-  python tool/toolruntime.py --help-apikey
 """
 from __future__ import annotations
 
@@ -34,46 +32,18 @@ import export as export_mod  # noqa: E402
 import prep as prep_mod  # noqa: E402
 import review as review_mod  # noqa: E402
 import structure as structure_mod  # noqa: E402
-from config import compile_exclude_patterns, load_settings  # noqa: E402
+from config import XL_OPENXML_WORKBOOK, compile_exclude_patterns, load_settings  # noqa: E402
 from excel_app import ExcelApp  # noqa: E402
 from merge import Merger  # noqa: E402
 
-ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-
-APIKEY_HELP = """
-============================================================
- Google AI Studio API 키 발급 방법 (선택사항)
-============================================================
-이 프로그램은 키 없이도 PDF 생성이 정상 동작합니다.
-AI 키를 등록하면 '최종 PDF 사후 검토(이상 탐지)' 품질이 향상됩니다.
-
-[1] https://aistudio.google.com/app/apikey 접속
-[2] 구글 로그인 → 'API 키 만들기' → 키 복사
-[3] tool\\.env 파일에  GEMINI_API_KEY=복사한키  저장
-    (또는 GUI의 'API 키 설정' 사용)
-============================================================
-"""
+REVIEW_XLSX_NAME = "출력물 오류 검토결과.xlsx"
 
 
-def _load_dotenv(project_dir=None):
-    paths = [ENV_PATH]
-    if project_dir:
-        paths.append(os.path.join(project_dir, ".env"))
-    for path in paths:
-        if not os.path.isfile(path):
-            continue
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#") or "=" not in line:
-                        continue
-                    k, v = line.split("=", 1)
-                    k, v = k.strip(), v.strip().strip('"').strip("'")
-                    if k and k not in os.environ:
-                        os.environ[k] = v
-        except Exception:
-            pass
+def _normalize_pdf_path(path):
+    path = os.path.abspath(path)
+    if os.path.splitext(path)[1].lower() != ".pdf":
+        path += ".pdf"
+    return path
 
 
 def _assign_pages(cell_findings, manifest):
@@ -88,9 +58,109 @@ def _assign_pages(cell_findings, manifest):
     for f in cell_findings:
         f["page"] = first_page.get((f.get("file"), f.get("sheet")))
         f["source"] = "excel"
-        f["types"] = ["열폭부족(###)" if f["kind"] == "overflow" else "수식오류"]
+        if f["kind"] == "ref_error":
+            f["types"] = ["#REF! 오류"]
+        elif f["kind"] == "error":
+            f["types"] = ["수식 오류"]
+        else:
+            f["types"] = ["# 연속 표시"]
         f["detail"] = f"{f.get('sheet')}!{f.get('cell')} → '{f.get('text')}'"
     return cell_findings
+
+
+def _original_location(finding):
+    file_path = (finding.get("file") or "").replace("\\", "/").strip("/")
+    folder = (finding.get("folder") or "").replace("\\", "/").strip("/")
+    if file_path:
+        return "/" + file_path
+    if folder:
+        return "/" + folder
+    return ""
+
+
+def _display_location(finding):
+    page = finding.get("page")
+    return f"최종 PDF {page}페이지" if page else ""
+
+
+def _korean_error_types(types):
+    if isinstance(types, str):
+        types = [types]
+    out = []
+    for t in types or []:
+        raw = str(t).strip()
+        low = raw.lower()
+        if "#REF" in raw.upper() or "ref" in low:
+            out.append("#REF! 오류")
+        elif "#" in raw or "overflow" in low or "열폭" in raw:
+            out.append("# 연속 표시")
+        elif "ref" in low or "div" in low or "value" in low or "수식" in raw:
+            out.append("수식 오류")
+        elif "테두리" in raw:
+            out.append("하단 표 테두리 누락 의심")
+        elif "잘림" in raw or "crop" in low or "cut" in low:
+            out.append("출력 범위 잘림")
+        elif "빈" in raw or "blank" in low:
+            out.append("빈 페이지 의심")
+        elif "깨짐" in raw or "broken" in low:
+            out.append("문자 또는 숫자 깨짐")
+        elif raw:
+            out.append(raw)
+    return ", ".join(dict.fromkeys(out))
+
+
+def save_review_xlsx(review_result, out_dir, cfg, log=print):
+    """프로그램 내부 오류 검토 결과를 사용자가 바로 열 수 있는 xlsx 표로 저장한다."""
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, REVIEW_XLSX_NAME)
+    headers = ["검토방식", "출력물 위치", "오류형태", "오류내용", "원본위치"]
+    rows = []
+    method = "프로그램 내부 로직"
+    for fnd in review_result.get("findings", []):
+        rows.append([
+            method,
+            _display_location(fnd),
+            _korean_error_types(fnd.get("types", [])),
+            str(fnd.get("detail", "") or ""),
+            _original_location(fnd),
+        ])
+    if not rows:
+        rows.append([method, "", "이상 없음", "검토 결과 발견된 오류가 없습니다.", ""])
+
+    with ExcelApp() as xl:
+        app = xl.app
+        wb = app.Workbooks.Add()
+        try:
+            ws = wb.Worksheets(1)
+            ws.Name = "출력물 오류 검토결과"
+            while wb.Worksheets.Count > 1:
+                wb.Worksheets(wb.Worksheets.Count).Delete()
+            for col, header in enumerate(headers, start=1):
+                cell = ws.Cells(1, col)
+                cell.Value = header
+                cell.Font.Bold = True
+                cell.Interior.Color = 0xD9EAF7
+            for r, row in enumerate(rows, start=2):
+                for c, value in enumerate(row, start=1):
+                    ws.Cells(r, c).Value = value
+            ws.Columns("A:E").EntireColumn.AutoFit()
+            try:
+                ws.Range("A1:E1").AutoFilter()
+                ws.Activate()
+                ws.Range("A2").Select()
+                app.ActiveWindow.FreezePanes = True
+            except Exception:
+                pass
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+            wb.SaveAs(path, FileFormat=XL_OPENXML_WORKBOOK)
+        finally:
+            wb.Close(SaveChanges=False)
+    log(f"출력물 오류 검토결과 Excel: {path}")
+    return path
 
 
 def backup_root(root, suffix, log):
@@ -102,29 +172,24 @@ def backup_root(root, suffix, log):
     return dst
 
 
-def run(root, no_ai=False, no_backup=False, out_path=None, log=print) -> int:
+def run(root, no_backup=False, out_path=None, log=print) -> int:
     root = os.path.abspath(root)
     if not os.path.isdir(root):
         log(f"[오류] 폴더가 아닙니다: {root}")
         return 2
 
-    _load_dotenv(root)
     cfg = load_settings(root)
     patterns = compile_exclude_patterns(cfg["exclude_sheet_patterns"])
 
     # 출력 위치: 사용자가 '출력 PDF'를 지정하면 그 폴더에 모든 산출물(PDF/manifest/리포트)을 둔다.
     if out_path:
-        out_path = os.path.abspath(out_path)
+        out_path = _normalize_pdf_path(out_path)
         out_root = os.path.dirname(out_path)
     else:
-        out_root = os.path.join(root, cfg["output_dir_name"])
-        out_path = os.path.join(out_root, os.path.basename(root) + cfg["merged_suffix"])
+        out_root = root
+        out_path = os.path.join(out_root, cfg.get("output_pdf_name", "수량산출서 output.pdf"))
 
-    if no_ai:
-        log("AI 출력물 검토: 이번 단계에서는 하지 않음 (PDF 생성 후 [AI 출력물 검토]로 실행).")
-    else:
-        ai_ok, ai_reason = review_mod.is_available(False)
-        log(f"AI 출력물 검토: {'PDF 생성과 함께 수행' if ai_ok else '키 없음 → 규칙 기반 검토'}")
+    log("출력물 오류 검토: 프로그램 내부 로직 사용")
 
     # [0] 백업
     if cfg.get("backup", True) and not no_backup:
@@ -184,10 +249,12 @@ def run(root, no_ai=False, no_backup=False, out_path=None, log=print) -> int:
                             cell_findings.append(it)
                     n_ov = sum(1 for f in cell_findings
                                if f["file"] == ev["relpath"] and f["kind"] == "overflow")
+                    n_ref = sum(1 for f in cell_findings
+                                if f["file"] == ev["relpath"] and f["kind"] == "ref_error")
                     n_er = sum(1 for f in cell_findings
                                if f["file"] == ev["relpath"] and f["kind"] == "error")
-                    if n_ov or n_er:
-                        log(f"    [탐지] 열폭부족(###) {n_ov}건, 수식오류 {n_er}건")
+                    if n_ov or n_ref or n_er:
+                        log(f"    [탐지] 연속 # {n_ov}건, #REF! {n_ref}건, 수식오류 {n_er}건")
                 tmp_dir = os.path.join(tmp_root, f"f{file_no:04d}")
                 sheets = export_mod.export_sheets(wb, pr["included"], tmp_dir)
                 if sheets:
@@ -231,9 +298,10 @@ def run(root, no_ai=False, no_backup=False, out_path=None, log=print) -> int:
     except Exception:
         pass
 
-    # [3.5] Excel 단계 셀 표시 오류 — AI 사용 여부와 무관하게 항상 보고/저장
+    # [3.5] Excel 단계 셀 표시 오류 — PDF 생성과 함께 항상 보고/저장
     _assign_pages(cell_findings, manifest)
     n_ov = sum(1 for f in cell_findings if f["kind"] == "overflow")
+    n_ref = sum(1 for f in cell_findings if f["kind"] == "ref_error")
     n_er = sum(1 for f in cell_findings if f["kind"] == "error")
     log("")
     log("===== PDF 생성 완료 =====")
@@ -242,37 +310,33 @@ def run(root, no_ai=False, no_backup=False, out_path=None, log=print) -> int:
         stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
         ci_path = os.path.join(out_root, f"cell_issues_{stamp}.json")
         with open(ci_path, "w", encoding="utf-8") as f:
-            json.dump({"overflow": n_ov, "error": n_er,
+            json.dump({"overflow": n_ov, "ref_error": n_ref, "error": n_er,
                        "findings": cell_findings}, f, ensure_ascii=False, indent=2)
-        log(f"셀 표시 오류: 열폭부족(###) {n_ov}건, 수식오류 {n_er}건  → {ci_path}")
+        log(f"셀 표시 오류: 연속 # {n_ov}건, #REF! {n_ref}건, 수식오류 {n_er}건  → {ci_path}")
         for fnd in cell_findings[:15]:
             log(f"  p.{fnd.get('page')} | {fnd.get('file')} > {fnd.get('sheet')}"
                 f"!{fnd.get('cell')} | {fnd['types'][0]} '{fnd.get('text')}'")
     else:
-        log("셀 표시 오류(###/수식오류): 발견 없음")
-    log("  ※ 단, 그림/단면도 안 숫자가 '출력 배율'로 ###처럼 찌그러지는 건 셀 값은 정상이라")
-    log("     이 탐지로는 안 잡힙니다. 그런 경우는 시각/AI 검토로 확인하세요.")
+        log("셀 표시 오류(연속 #/#REF!/수식오류): 발견 없음")
+    log("  ※ 셀 값이 정상이어도 PDF 하단 표 테두리 누락 의심은 출력물 검토 단계에서 확인합니다.")
 
-    # [4] AI 출력물 검토 (옵션) — 기본은 생략, --ai 지정 시에만 수행
-    if no_ai:
-        log("AI 출력물 검토는 생략됨 (완료 후 'AI 출력물 검토'로 실행).")
-        return 0
-
-    rev = review_mod.review(out_path, manifest, cfg, no_ai=False, log=log,
-                            extra_findings=cell_findings)
+    # [4] 출력물 오류 검토 — 프로그램 내부 로직으로 수행
+    rev = review_mod.review(out_path, manifest, cfg, log=log, extra_findings=cell_findings)
     stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     rev_path = os.path.join(out_root, f"review_{stamp}.json")
     with open(rev_path, "w", encoding="utf-8") as f:
         json.dump(rev, f, ensure_ascii=False, indent=2)
+    xlsx_path = save_review_xlsx(rev, out_root, cfg, log=log)
     log(f"이상 의심: {rev['issue_count']}건 ({rev['mode']})  → {rev_path}")
+    log(f"검토 결과표: {xlsx_path}")
     for fnd in rev["findings"][:10]:
         log(f"  p.{fnd['page']} | {fnd.get('file')} > {fnd.get('sheet')} "
             f"| {','.join(fnd.get('types', []))} {fnd.get('detail','')}")
     return 0
 
 
-def run_review_only(target, no_ai=False, log=print) -> int:
-    """이미 생성된 통합 PDF에 대해 AI 출력물 검토만 수행."""
+def run_review_only(target, log=print) -> int:
+    """이미 생성된 통합 PDF에 대해 프로그램 내부 오류 검토만 수행."""
     target = os.path.abspath(target)
     if os.path.isdir(target):
         cands = [f for f in os.listdir(target) if f.lower().endswith(".pdf")]
@@ -289,7 +353,6 @@ def run_review_only(target, no_ai=False, log=print) -> int:
         log(f"[오류] PDF 없음: {pdf}")
         return 2
 
-    _load_dotenv(out_dir)
     cfg = load_settings(out_dir)
     manifest = []
     mpath = os.path.join(out_dir, "manifest.json")
@@ -301,15 +364,17 @@ def run_review_only(target, no_ai=False, log=print) -> int:
     else:
         log("[안내] manifest.json 이 없어 위치(폴더/파일/시트) 매핑이 제한됩니다.")
 
-    log(f"AI 출력물 검토 대상: {pdf}")
-    rev = review_mod.review(pdf, manifest, cfg, no_ai, log=log)
+    log(f"출력물 오류 검토 대상: {pdf}")
+    rev = review_mod.review(pdf, manifest, cfg, log=log)
     stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     rev_path = os.path.join(out_dir, f"review_{stamp}.json")
     with open(rev_path, "w", encoding="utf-8") as f:
         json.dump(rev, f, ensure_ascii=False, indent=2)
+    xlsx_path = save_review_xlsx(rev, out_dir, cfg, log=log)
     log("")
     log("===== 검토 완료 =====")
     log(f"이상 의심: {rev['issue_count']}건 ({rev['mode']}) → {rev_path}")
+    log(f"검토 결과표: {xlsx_path}")
     for fnd in rev["findings"][:15]:
         log(f"  p.{fnd['page']} | {fnd.get('file')} > {fnd.get('sheet')} "
             f"| {','.join(fnd.get('types', []))} {fnd.get('detail','')}")
@@ -321,25 +386,17 @@ def main(argv=None) -> int:
         prog="수량산출서 출력 자동화 도구",
         description="루트 폴더의 모든 시트를 폴더·파일 순서로 단일 PDF(간지 포함)로 병합합니다.")
     p.add_argument("input", nargs="?", help="수량산출서 루트 폴더")
-    p.add_argument("--out", help="출력 PDF 경로(기본: 루트\\_output\\<폴더명>_통합.pdf)")
-    p.add_argument("--ai", action="store_true",
-                   help="PDF 생성과 함께 AI 출력물 검토도 수행")
-    p.add_argument("--review", help="기존 통합 PDF(또는 _output 폴더)에 대해 AI 출력물 검토만 수행")
+    p.add_argument("--out", help="출력 PDF 경로(기본: 루트\\수량산출서 output.pdf)")
+    p.add_argument("--review", help="기존 통합 PDF(또는 출력 폴더)에 대해 오류 검토만 수행")
     p.add_argument("--no-backup", action="store_true", help="원본 백업 생략(주의)")
-    p.add_argument("--help-apikey", action="store_true", help="API 키 발급 안내")
     args = p.parse_args(argv)
 
-    if args.help_apikey:
-        print(APIKEY_HELP)
-        return 0
     if args.review:
-        return run_review_only(args.review, no_ai=False)
+        return run_review_only(args.review)
     if not args.input:
         p.print_help()
         return 2
-    # 기본: PDF만 생성(AI 검토는 완료 후 별도 옵션). --ai 지정 시 함께 검토.
-    return run(args.input, no_ai=(not args.ai),
-               no_backup=args.no_backup, out_path=args.out)
+    return run(args.input, no_backup=args.no_backup, out_path=args.out)
 
 
 if __name__ == "__main__":
