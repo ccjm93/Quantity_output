@@ -13,7 +13,6 @@ import re
 # ---- Excel COM 상수 (gencache 없이 직접 사용) ----
 XL_TYPE_PDF = 0
 MSO_AUTOMATION_SECURITY_FORCE_DISABLE = 3
-XL_CALC_MANUAL = -4135
 XL_SHEET_VISIBLE = -1
 XL_VIEW_PAGEBREAK_PREVIEW = 2   # ActiveWindow.View = xlPageBreakPreview
 
@@ -34,6 +33,10 @@ DEFAULTS = {
     # 원본 변경 전 자동 백업 (원본에 PBP 저장하므로 기본 ON)
     "backup": True,
     "backup_suffix": "_backup",
+    # 백업 회전: 최근 N개만 유지(0 이면 무제한). 매 실행 전체 복사이므로 디스크 보호용.
+    "backup_keep": 3,
+    # _output 안의 시각 스탬프 리포트(review_*.json / cell_issues_*.json) 최근 N개 유지(0=무제한)
+    "report_keep": 10,
     # 인쇄영역 처리: 원래 지정된 인쇄영역은 그대로 두고,
     # 지정되지 않은 시트는 Excel 기본값(설정 안 함=자동 결정)으로 둔다.
     # True 로 바꾸면 인쇄영역 없는 시트를 UsedRange 로 설정한다(기본 False).
@@ -44,6 +47,8 @@ DEFAULTS = {
     "rule_dpi": 100,
     # Excel 단계 셀 표시 오류(### 오버플로우 / 수식오류) 결정론적 탐지
     "detect_cell_issues": True,
+    # 오류 위치를 빨간 박스로 그린 검토용 PDF 사본('<이름>(검토표시).pdf') 생성
+    "marked_pdf": True,
     # 처리 대상 확장자
     "extensions": [".xlsx", ".xlsm", ".xls"],
 }
@@ -84,3 +89,11 @@ def load_settings(project_dir: str | None = None) -> dict:
 
 def compile_exclude_patterns(patterns: list[str]):
     return [re.compile(p, re.IGNORECASE) for p in patterns]
+
+
+def normalize_pdf_path(path: str) -> str:
+    """출력 PDF 경로 정규화: 절대경로 + .pdf 확장자 보장 (CLI/GUI 공용)."""
+    path = os.path.abspath(path)
+    if os.path.splitext(path)[1].lower() != ".pdf":
+        path += ".pdf"
+    return path

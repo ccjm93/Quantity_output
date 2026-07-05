@@ -13,7 +13,7 @@ import fitz  # pymupdf
 from config import XL_TYPE_PDF
 
 
-def export_sheets(wb, included_names, tmp_dir) -> list:
+def export_sheets(wb, included_names, tmp_dir, log=print) -> list:
     """Returns [{sheet, pdf, pages}] (export 실패 시 해당 시트 제외)."""
     os.makedirs(tmp_dir, exist_ok=True)
     out = []
@@ -28,7 +28,7 @@ def export_sheets(wb, included_names, tmp_dir) -> list:
                 Type=XL_TYPE_PDF, Filename=os.path.abspath(pdf),
                 IgnorePrintAreas=False, OpenAfterPublish=False)
         except Exception as e:
-            print(f"    [경고] 시트 export 실패({name}): {e}")
+            log(f"    [경고] 시트 export 실패({name}): {e}")
             continue
         if not os.path.isfile(pdf):
             continue

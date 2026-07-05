@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 import queue
+import re
+import signal
 import subprocess
 import sys
 import threading
@@ -18,7 +20,9 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from config import load_settings  # noqa: E402
+from config import load_settings, normalize_pdf_path  # noqa: E402
+
+_PROGRESS_RE = re.compile(r"^\[(\d+)/(\d+)\]")  # toolruntime 의 "[3/17] 파일명" 로그
 
 
 class App:
@@ -26,6 +30,8 @@ class App:
         self.root = root
         self.q = queue.Queue()
         self._last_out = None
+        self._proc = None
+        root.protocol("WM_DELETE_WINDOW", self.on_close)
         root.title("수량산출서 출력 자동화 도구")
         root.geometry("780x600")
         root.minsize(700, 520)
@@ -72,6 +78,9 @@ class App:
         self.open_btn = tk.Button(frm4, text="출력 폴더 열기", height=2,
                                   state="disabled", command=self.open_output)
         self.open_btn.pack(side="left", padx=8)
+        self.pdf_btn = tk.Button(frm4, text="PDF 열기", height=2,
+                                 state="disabled", command=self.open_pdf)
+        self.pdf_btn.pack(side="left", padx=8)
         self.prog = ttk.Progressbar(frm4, mode="indeterminate")
         self.prog.pack(side="left", fill="x", expand=True, padx=8)
         self._last_pdf = None
@@ -101,17 +110,11 @@ class App:
 
     def _expected_pdf(self, target):
         if self.out_var.get().strip():
-            return self._normalize_pdf_path(self.out_var.get().strip())
+            return normalize_pdf_path(self.out_var.get().strip())
         # toolruntime 과 동일하게 설정값에서 산출물 폴더명/파일명을 읽어 경로를 맞춘다.
         cfg = load_settings(target)
         return os.path.join(target, cfg.get("output_dir_name", "_output"),
                             cfg.get("output_pdf_name", "수량산출서 output.pdf"))
-
-    def _normalize_pdf_path(self, path):
-        path = os.path.abspath(path)
-        if os.path.splitext(path)[1].lower() != ".pdf":
-            path += ".pdf"
-        return path
 
     def start(self):
         target = self.path_var.get().strip()
@@ -125,7 +128,7 @@ class App:
         # PDF 생성만 수행 (오류 검토는 완료 후 '출력물 오류 검토' 버튼으로 선택 실행)
         cmd = [sys.executable, "-u", os.path.join(HERE, "toolruntime.py"), target]
         if self.out_var.get().strip():
-            cmd += ["--out", self._normalize_pdf_path(self.out_var.get().strip())]
+            cmd += ["--out", normalize_pdf_path(self.out_var.get().strip())]
         if not self.backup.get():
             cmd += ["--no-backup"]
         self._last_pdf = self._expected_pdf(target)
@@ -151,6 +154,8 @@ class App:
         self.run_btn.config(state="disabled")
         self.review_btn.config(state="disabled")
         self.open_btn.config(state="disabled")
+        self.pdf_btn.config(state="disabled")
+        self.prog.config(mode="indeterminate")
         self.prog.start(12)
         self.log.delete("1.0", "end")
         self._log(msg)
@@ -159,9 +164,12 @@ class App:
         try:
             env = dict(os.environ)
             env["PYTHONUTF8"] = "1"
+            # 새 프로세스 그룹: 창 닫기 시 CTRL_BREAK 로 정상 중단(Excel 정리)시키기 위함
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True,
-                                    encoding="utf-8", errors="replace", bufsize=1, env=env)
+                                    encoding="utf-8", errors="replace", bufsize=1, env=env,
+                                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+            self._proc = proc
             for line in proc.stdout:
                 self.q.put(("log", line))
             proc.wait()
@@ -169,6 +177,18 @@ class App:
         except Exception as e:
             self.q.put(("log", f"[오류] {e}\n"))
             self.q.put(("done", (mode, -1)))
+        finally:
+            self._proc = None
+
+    def _update_progress(self, line):
+        m = _PROGRESS_RE.match(line)
+        if not m:
+            return
+        current, total = int(m.group(1)), int(m.group(2))
+        if total > 0:
+            self.prog.stop()
+            self.prog.config(mode="determinate", maximum=total)
+            self.prog["value"] = current - 1  # i번째 파일 '시작' 시점
 
     def _drain(self):
         try:
@@ -176,13 +196,17 @@ class App:
                 kind, payload = self.q.get_nowait()
                 if kind == "log":
                     self._log(payload)
+                    self._update_progress(payload)
                 elif kind == "done":
                     mode, code = payload
                     self.prog.stop()
+                    self.prog.config(mode="determinate")
+                    self.prog["value"] = self.prog["maximum"] if code == 0 else 0
                     self.run_btn.config(state="normal")
                     pdf_ok = bool(self._last_pdf and os.path.isfile(self._last_pdf))
                     out_ok = bool(self._last_out and os.path.isdir(self._last_out))
                     self.open_btn.config(state="normal" if out_ok else "disabled")
+                    self.pdf_btn.config(state="normal" if pdf_ok else "disabled")
                     self.review_btn.config(state="normal")
                     if code == 0 and mode == "generate":
                         self._log("\n=== PDF 생성 완료 ===\n")
@@ -201,6 +225,29 @@ class App:
             os.startfile(self._last_out)
         else:
             messagebox.showinfo("안내", "아직 출력 폴더가 없습니다.")
+
+    def open_pdf(self):
+        if self._last_pdf and os.path.isfile(self._last_pdf):
+            os.startfile(self._last_pdf)
+        else:
+            messagebox.showinfo("안내", "아직 생성된 PDF가 없습니다.")
+
+    def on_close(self):
+        proc = self._proc
+        if proc and proc.poll() is None:
+            if not messagebox.askyesno(
+                    "확인", "작업이 진행 중입니다. 중단하고 종료할까요?\n"
+                    "(진행 중이던 Excel은 안전하게 정리됩니다)"):
+                return
+            try:
+                proc.send_signal(signal.CTRL_BREAK_EVENT)  # toolruntime 이 Excel 정리 후 종료
+                proc.wait(timeout=15)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        self.root.destroy()
 
 
 def main():

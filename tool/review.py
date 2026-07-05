@@ -24,8 +24,7 @@ def _text_findings(page_text, page_no, manifest_by_page):
         findings.append({"page": page_no, "types": ["#REF! 오류"], "source": "program",
                          "detail": "PDF 텍스트에서 #REF! 표시가 발견되었습니다.",
                          **{k: loc.get(k) for k in ("folder", "file", "sheet")}})
-    hash_runs = [m.group(0) for m in _HASH_RUN.finditer(page_text)
-                 if not page_text[m.start():m.start() + 5].upper().startswith("#REF!")]
+    hash_runs = [m.group(0) for m in _HASH_RUN.finditer(page_text)]
     if hash_runs:
         longest = max(hash_runs, key=len)
         findings.append({"page": page_no, "types": ["# 연속 표시"], "source": "program",

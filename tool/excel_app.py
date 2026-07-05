@@ -7,16 +7,14 @@
 """
 from __future__ import annotations
 
+import ctypes
 import gc
 import subprocess
 
 import pythoncom
 import win32com.client as win32
 
-from config import (
-    MSO_AUTOMATION_SECURITY_FORCE_DISABLE,
-    XL_CALC_MANUAL,
-)
+from config import MSO_AUTOMATION_SECURITY_FORCE_DISABLE
 
 
 def _excel_pids() -> set[int]:
@@ -47,8 +45,12 @@ class ExcelApp:
         pythoncom.CoInitialize()
         before = _excel_pids()
         self.app = win32.DispatchEx("Excel.Application")
-        after = _excel_pids()
-        self._own_pids = after - before  # 이번에 새로 뜬 프로세스만
+        # 자기 인스턴스의 PID를 창 핸들에서 직접 얻는다(동시에 뜬 다른 Excel 오인 방지).
+        pid = self._pid_from_hwnd()
+        if pid:
+            self._own_pids = {pid}
+        else:
+            self._own_pids = _excel_pids() - before  # 차선책: 새로 뜬 프로세스 차집합
 
         app = self.app
         app.Visible = False
@@ -60,11 +62,17 @@ class ExcelApp:
             app.AutomationSecurity = MSO_AUTOMATION_SECURITY_FORCE_DISABLE
         except Exception:
             pass
-        try:
-            app.Calculation = XL_CALC_MANUAL
-        except Exception:
-            pass  # 열린 워크북이 없으면 실패할 수 있음 → 무시
+        # 계산 모드는 자동(기본값) 유지 — 열 때 재계산되어 최신 값으로 출력된다.
         return self
+
+    def _pid_from_hwnd(self):
+        try:
+            hwnd = int(self.app.Hwnd)
+            pid = ctypes.c_ulong(0)
+            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            return int(pid.value) or None
+        except Exception:
+            return None
 
     def __exit__(self, exc_type, exc, tb):
         try:

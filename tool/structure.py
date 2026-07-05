@@ -36,13 +36,12 @@ def scan(root: str, extensions, output_dir_name="_output", backup_suffix="_backu
          skip_names=()):
     root = os.path.abspath(root)
     exts = tuple(e.lower() for e in extensions)
-    events = []
 
-    def walk(folder: str, depth: int):
+    def walk(folder: str, depth: int) -> list:
         try:
             entries = os.listdir(folder)
         except Exception:
-            return
+            return []
         dirs, files = [], []
         for e in entries:
             full = os.path.join(folder, e)
@@ -55,19 +54,23 @@ def scan(root: str, extensions, output_dir_name="_output", backup_suffix="_backu
         # 폴더+파일을 같은 레벨에서 함께 자연정렬
         merged = sorted([(d, True) for d in dirs] + [(f, False) for f in files],
                         key=lambda x: natural_key(x[0]))
+        events = []
         for name, is_dir in merged:
             full = os.path.join(folder, name)
             rel = os.path.relpath(full, root)
             if is_dir:
-                events.append({"type": "folder", "name": name,
-                               "relpath": rel, "depth": depth})
-                walk(full, depth + 1)
+                children = walk(full, depth + 1)
+                # 하위에 처리할 파일이 하나도 없는 폴더는 간지만 남으므로 제외
+                if children:
+                    events.append({"type": "folder", "name": name,
+                                   "relpath": rel, "depth": depth})
+                    events.extend(children)
             else:
                 events.append({"type": "file", "name": name, "relpath": rel,
                                "abspath": full, "depth": depth})
+        return events
 
-    walk(root, 0)
-    return events
+    return walk(root, 0)
 
 
 def summarize(events) -> str:

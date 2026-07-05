@@ -16,8 +16,9 @@ _FONT_TAG = "krfont"
 
 
 class Merger:
-    def __init__(self, font_path: str):
+    def __init__(self, font_path: str, log=print):
         self.doc = fitz.open()
+        self.log = log
         self.manifest = []  # [{page, type, folder, file, sheet}]
         self.font_path = font_path if (font_path and os.path.isfile(font_path)) else None
         self._font = None
@@ -69,7 +70,7 @@ class Merger:
         try:
             src = fitz.open(pdf_path)
         except Exception as e:
-            print(f"    [경고] 시트 PDF 열기 실패({sheet_name}): {e}")
+            self.log(f"    [경고] 시트 PDF 열기 실패({sheet_name}): {e}")
             return
         start = len(self.doc)
         self.doc.insert_pdf(src)
@@ -87,13 +88,3 @@ class Merger:
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         self.doc.save(out_path, deflate=True, garbage=3)
         self.doc.close()
-
-    def location_of(self, page_no):
-        """1-based 페이지 → 위치 설명 (review 보고용)."""
-        loc = None
-        for m in self.manifest:
-            if m["page"] <= page_no:
-                loc = m
-            else:
-                break
-        return loc
