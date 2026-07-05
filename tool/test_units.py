@@ -109,20 +109,20 @@ class TestReview(unittest.TestCase):
         self.assertEqual(review._groups([]), [])
 
     @staticmethod
-    def _synthetic_pix(w, h, verticals, v_y0, v_y1, hline_y=None):
+    def _synthetic_pix(w, h, verticals, v_y0, v_y1, hline_y=None, hline_gray=0):
         """흰 배경에 세로선/가로선(1px)을 그린 가짜 pixmap (RGB)."""
         import types
         buf = bytearray(b"\xff" * (w * h * 3))
 
-        def put(x, y):
+        def put(x, y, v=0):
             idx = (y * w + x) * 3
-            buf[idx] = buf[idx + 1] = buf[idx + 2] = 0
+            buf[idx] = buf[idx + 1] = buf[idx + 2] = v
         for x in verticals:
             for y in range(v_y0, v_y1 + 1):
                 put(x, y)
         if hline_y is not None:
             for x in range(verticals[0], verticals[-1] + 1):
-                put(x, hline_y)
+                put(x, hline_y, hline_gray)
         return types.SimpleNamespace(width=w, height=h, n=3, samples=bytes(buf))
 
     def test_bottom_border_detects_missing_line(self):
@@ -140,6 +140,19 @@ class TestReview(unittest.TestCase):
     def test_bottom_border_ignores_1px_closing_line_on_even_row(self):
         pix = self._synthetic_pix(600, 1000, [100, 300, 500], 400, 899, hline_y=900)
         self.assertIsNone(review._bottom_border_finding(pix, 1, {}))
+
+    def test_bottom_border_ignores_antialiased_gray_closing_line(self):
+        """안티앨리어싱으로 회색(약 150)이 된 마감선도 선으로 인정한다."""
+        pix = self._synthetic_pix(600, 1000, [100, 300, 500], 400, 898,
+                                  hline_y=899, hline_gray=150)
+        self.assertIsNone(review._bottom_border_finding(pix, 1, {}))
+
+    def test_bottom_border_light_fill_is_not_a_line(self):
+        """밝은 음영(회색 217)은 마감선으로 오인하지 않는다."""
+        pix = self._synthetic_pix(600, 1000, [100, 300, 500], 400, 898,
+                                  hline_y=899, hline_gray=217)
+        found = review._bottom_border_finding(pix, 1, {})
+        self.assertIsNotNone(found)
 
 
 class TestToolruntime(unittest.TestCase):

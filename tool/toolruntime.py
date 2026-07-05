@@ -21,8 +21,10 @@ import tempfile
 import traceback
 
 try:
-    sys.stdout.reconfigure(encoding="utf-8")
-    sys.stderr.reconfigure(encoding="utf-8")
+    # line_buffering: exe(frozen) 자식 프로세스에는 -u 를 못 넘기므로
+    # GUI 로그가 실시간 스트리밍되도록 줄 단위 플러시를 보장한다.
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+    sys.stderr.reconfigure(encoding="utf-8", line_buffering=True)
 except Exception:
     pass
 

@@ -37,6 +37,15 @@ def _is_dark(samples, idx):
     return samples[idx] < 90 and samples[idx + 1] < 90 and samples[idx + 2] < 90
 
 
+def _is_darkish(samples, idx, thr=176):
+    """안티앨리어싱된 헤어라인 검출용 완화 기준.
+
+    1px 미만 두께의 테두리는 저해상도 렌더링에서 두 행에 걸쳐 회색(약 90~176)으로
+    퍼지는 경우가 많아 _is_dark(<90) 로는 놓친다. 밝은 음영 채우기(회색 217,
+    노랑 255,255,0)는 걸리지 않는 수준의 문턱값이다."""
+    return samples[idx] < thr and samples[idx + 1] < thr and samples[idx + 2] < thr
+
+
 def _blank_page_finding(pix, page_text, page_no, manifest_by_page):
     if page_text.strip():
         return None
@@ -122,12 +131,13 @@ def _bottom_border_finding(pix, page_no, manifest_by_page):
     span_samples = max(1, (last_x - first_x) // step)
     horizontal_found = False
     # 주의: 하단 마감선은 두께 1px 인 경우가 많아 세로 방향은 반드시 1px 단위로
-    # 훑는다 — step 2 로 건너뛰면 절반 확률로 선을 놓쳐 오탐이 난다.
+    # 훑고(step 2 는 절반 확률로 선을 놓침), 안티앨리어싱으로 회색이 된 선도
+    # 잡도록 완화 기준(_is_darkish)을 쓴다.
     for y in range(search0, search1):
         row_base = y * w * n
         dark = 0
         for x in range(first_x, last_x, step):
-            if _is_dark(samples, row_base + x * n):
+            if _is_darkish(samples, row_base + x * n):
                 dark += 1
         if dark >= span_samples * 0.28:
             horizontal_found = True

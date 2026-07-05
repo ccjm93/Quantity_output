@@ -116,6 +116,14 @@ class App:
         return os.path.join(target, cfg.get("output_dir_name", "_output"),
                             cfg.get("output_pdf_name", "수량산출서 output.pdf"))
 
+    @staticmethod
+    def _runtime_cmd():
+        """toolruntime 실행 명령. exe(frozen) 모드에서는 파이썬이 없으므로
+        자기 자신을 --cli 인자로 재실행한다(모듈 하단 분기 참조)."""
+        if getattr(sys, "frozen", False):
+            return [sys.executable, "--cli"]
+        return [sys.executable, "-u", os.path.join(HERE, "toolruntime.py")]
+
     def start(self):
         target = self.path_var.get().strip()
         if not target or not os.path.isdir(target):
@@ -126,7 +134,7 @@ class App:
                     "주의", "원본 백업 없이 진행하면 원본 파일이 변경됩니다.\n계속할까요?"):
                 return
         # PDF 생성만 수행 (오류 검토는 완료 후 '출력물 오류 검토' 버튼으로 선택 실행)
-        cmd = [sys.executable, "-u", os.path.join(HERE, "toolruntime.py"), target]
+        cmd = self._runtime_cmd() + [target]
         if self.out_var.get().strip():
             cmd += ["--out", normalize_pdf_path(self.out_var.get().strip())]
         if not self.backup.get():
@@ -145,8 +153,7 @@ class App:
                 return
             self._last_pdf = p
             self._last_out = os.path.dirname(p)
-        cmd = [sys.executable, "-u", os.path.join(HERE, "toolruntime.py"),
-               "--review", self._last_pdf]
+        cmd = self._runtime_cmd() + ["--review", self._last_pdf]
         self._busy("출력물 오류 검토 시작...\n\n")
         threading.Thread(target=self._worker, args=(cmd, "review"), daemon=True).start()
 
@@ -257,4 +264,9 @@ def main():
 
 
 if __name__ == "__main__":
+    # exe(frozen) 모드에서 GUI 가 작업을 실행할 때: '자기자신.exe --cli <인자...>'
+    # 로 재실행되어 toolruntime CLI 로 동작한다.
+    if len(sys.argv) > 1 and sys.argv[1] == "--cli":
+        import toolruntime
+        sys.exit(toolruntime.main(sys.argv[2:]))
     main()
