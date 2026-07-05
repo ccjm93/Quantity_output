@@ -108,6 +108,39 @@ class TestReview(unittest.TestCase):
                          [(1, 3), (10, 11), (30, 30)])
         self.assertEqual(review._groups([]), [])
 
+    @staticmethod
+    def _synthetic_pix(w, h, verticals, v_y0, v_y1, hline_y=None):
+        """흰 배경에 세로선/가로선(1px)을 그린 가짜 pixmap (RGB)."""
+        import types
+        buf = bytearray(b"\xff" * (w * h * 3))
+
+        def put(x, y):
+            idx = (y * w + x) * 3
+            buf[idx] = buf[idx + 1] = buf[idx + 2] = 0
+        for x in verticals:
+            for y in range(v_y0, v_y1 + 1):
+                put(x, y)
+        if hline_y is not None:
+            for x in range(verticals[0], verticals[-1] + 1):
+                put(x, hline_y)
+        return types.SimpleNamespace(width=w, height=h, n=3, samples=bytes(buf))
+
+    def test_bottom_border_detects_missing_line(self):
+        """마감 가로선이 없으면 의심 finding 을 낸다."""
+        pix = self._synthetic_pix(600, 1000, [100, 300, 500], 400, 898)
+        found = review._bottom_border_finding(pix, 1, {})
+        self.assertIsNotNone(found)
+        self.assertIn("하단 표 테두리 누락 의심", found["types"])
+
+    def test_bottom_border_ignores_1px_closing_line_on_odd_row(self):
+        """1px 마감선이 홀수 행에 있어도(과거 step2 스캔이 놓치던 케이스) 오탐하지 않는다."""
+        pix = self._synthetic_pix(600, 1000, [100, 300, 500], 400, 898, hline_y=899)
+        self.assertIsNone(review._bottom_border_finding(pix, 1, {}))
+
+    def test_bottom_border_ignores_1px_closing_line_on_even_row(self):
+        pix = self._synthetic_pix(600, 1000, [100, 300, 500], 400, 899, hline_y=900)
+        self.assertIsNone(review._bottom_border_finding(pix, 1, {}))
+
 
 class TestToolruntime(unittest.TestCase):
     def test_normalize_pdf_path(self):
@@ -303,6 +336,36 @@ class TestAnnotate(unittest.TestCase):
             self.assertEqual(len(marked.load_page(0).get_drawings()), 0)
             self.assertEqual(len(marked.load_page(1).get_drawings()), 1)
             marked.close()
+
+    def test_border_box_has_location_label(self):
+        """점선 박스 안에 '파일/시트' 위치 라벨이 표기된다(한글 폰트 필요)."""
+        import fitz
+        font = load_settings(None).get("divider_font")
+        if not (font and os.path.isfile(font)):
+            self.skipTest("한글 폰트 없음")
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "src.pdf")
+            doc = fitz.open()
+            doc.new_page()
+            doc.save(src)
+            doc.close()
+            findings = [{"page": 1, "types": ["하단 표 테두리 누락 의심"],
+                         "file": "2. 취수틀\\7.0 추진공.xlsm", "sheet": "#1"}]
+            out = os.path.join(d, "out.pdf")
+            annotate.create_marked_pdf(src, findings, out,
+                                       font_path=font, log=lambda *a: None)
+            marked = fitz.open(out)
+            text = marked.load_page(0).get_text()
+            marked.close()
+            self.assertIn("하단 테두리 확인", text)
+            self.assertIn("7.0 추진공.xlsm", text)
+            self.assertIn("#1", text)
+
+    def test_location_label(self):
+        self.assertEqual(
+            annotate._location_label({"file": "a\\b.xlsx", "sheet": "토공"}),
+            "a/b.xlsx / 토공")
+        self.assertIsNone(annotate._location_label({}))
 
     def test_create_marked_pdf_no_findings(self):
         self.assertIsNone(annotate.create_marked_pdf(

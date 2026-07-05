@@ -398,7 +398,7 @@ def _save_marked_pdf(pdf, findings, cfg, log, manifest=None):
     try:
         return annotate_mod.create_marked_pdf(
             pdf, findings, annotate_mod.marked_pdf_path(pdf),
-            manifest=manifest, log=log)
+            manifest=manifest, font_path=cfg.get("divider_font"), log=log)
     except Exception as e:
         log(f"[경고] 검토 표시 PDF 생성 실패: {e}")
         return None

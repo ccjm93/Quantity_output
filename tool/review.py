@@ -117,11 +117,13 @@ def _bottom_border_finding(pix, page_no, manifest_by_page):
     if vertical_bottom < h * 0.84:
         return None
 
-    search0 = max(y0, vertical_bottom - 10)
-    search1 = min(y1, vertical_bottom + 10)
+    search0 = max(y0, vertical_bottom - 12)
+    search1 = min(y1, vertical_bottom + 12)
     span_samples = max(1, (last_x - first_x) // step)
     horizontal_found = False
-    for y in range(search0, search1, step):
+    # 주의: 하단 마감선은 두께 1px 인 경우가 많아 세로 방향은 반드시 1px 단위로
+    # 훑는다 — step 2 로 건너뛰면 절반 확률로 선을 놓쳐 오탐이 난다.
+    for y in range(search0, search1):
         row_base = y * w * n
         dark = 0
         for x in range(first_x, last_x, step):

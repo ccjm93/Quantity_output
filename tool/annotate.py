@@ -26,6 +26,31 @@ def marked_pdf_path(pdf_path: str) -> str:
     return f"{base}{MARKED_SUFFIX}{ext or '.pdf'}"
 
 
+def _location_label(finding) -> str | None:
+    """박스 안에 표기할 '폴더/파일명/시트명' 라벨 (없는 항목은 생략)."""
+    parts = []
+    file_rel = (finding.get("file") or "").replace("\\", "/").strip("/")
+    if file_rel:
+        parts.append(file_rel)  # relpath 라 폴더명이 이미 포함됨
+    elif finding.get("folder"):
+        parts.append(str(finding["folder"]).replace("\\", "/").strip("/"))
+    if finding.get("sheet"):
+        parts.append(str(finding["sheet"]))
+    return " / ".join(parts) if parts else None
+
+
+def _insert_label(page, x, y, text, font_path):
+    """빨간 라벨 텍스트 삽입 (한글 폰트 필요 — 실패해도 박스는 유지)."""
+    try:
+        if font_path and os.path.isfile(font_path):
+            page.insert_text((x, y), text, fontsize=9, color=_RED,
+                             fontname="krfont", fontfile=font_path)
+        else:
+            page.insert_text((x, y), text, fontsize=9, color=_RED)
+    except Exception:
+        pass
+
+
 def _search_text(finding) -> str | None:
     """finding 에서 페이지 내 검색에 쓸 표시 텍스트를 얻는다."""
     text = (finding.get("text") or "").strip()
@@ -40,7 +65,7 @@ def _search_text(finding) -> str | None:
     return None
 
 
-def _mark(page, finding, seen: set) -> int:
+def _mark(page, finding, seen: set, font_path=None) -> int:
     """finding 하나를 페이지에 표시. 그린 박스 개수를 반환.
 
     seen: 같은 페이지에서 이미 표시한 (종류/검색어) 집합 — 같은 텍스트를 여러
@@ -51,17 +76,25 @@ def _mark(page, finding, seen: set) -> int:
         if "빈페이지" in seen:
             return 0
         seen.add("빈페이지")
-        page.draw_rect(fitz.Rect(rect.x0 + 6, rect.y0 + 6, rect.x1 - 6, rect.y1 - 6),
-                       color=_RED, width=2)
+        box = fitz.Rect(rect.x0 + 6, rect.y0 + 6, rect.x1 - 6, rect.y1 - 6)
+        page.draw_rect(box, color=_RED, width=2)
+        loc = _location_label(finding)
+        if loc:
+            _insert_label(page, box.x0 + 6, box.y0 + 14,
+                          f"[빈 페이지 의심] {loc}", font_path)
         return 1
     if "테두리" in types:
         if "테두리" in seen:
             return 0
         seen.add("테두리")
         # review._bottom_border_finding 이 검사한 하단 영역과 동일한 범위
-        page.draw_rect(fitz.Rect(rect.width * 0.07, rect.height * 0.72,
-                                 rect.width * 0.93, rect.height * 0.965),
-                       color=_RED, width=1.2, dashes="[4 3] 0")
+        box = fitz.Rect(rect.width * 0.07, rect.height * 0.72,
+                        rect.width * 0.93, rect.height * 0.965)
+        page.draw_rect(box, color=_RED, width=1.2, dashes="[4 3] 0")
+        loc = _location_label(finding)
+        if loc:
+            _insert_label(page, box.x0 + 6, box.y1 - 6,
+                          f"[하단 테두리 확인] {loc}", font_path)
         return 1
     text = _search_text(finding)
     if not text or ("text", text) in seen:
@@ -75,7 +108,8 @@ def _mark(page, finding, seen: set) -> int:
     return n
 
 
-def create_marked_pdf(src_pdf, findings, out_path, manifest=None, log=print):
+def create_marked_pdf(src_pdf, findings, out_path, manifest=None,
+                      font_path=None, log=print):
     """page 가 매핑된 findings 를 빨간 표시로 그린 사본을 저장. 대상이 없으면 None.
 
     manifest 가 있으면 Excel 단계 finding(source='excel')은 해당 시트가 차지하는
@@ -109,7 +143,7 @@ def create_marked_pdf(src_pdf, findings, out_path, manifest=None, log=print):
             seen = set()
             n = 0
             for f in items:
-                n += _mark(page, f, seen)
+                n += _mark(page, f, seen, font_path)
             boxes += n
             if n:
                 marked_pages += 1
